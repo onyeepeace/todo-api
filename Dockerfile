@@ -4,6 +4,6 @@ COPY go.mod go.sum ./
 RUN go mod tidy
 COPY . .
 RUN go build -o server cmd/server/main.go
-RUN chmod +x main
+RUN chmod +x server
 EXPOSE 4000
-CMD [ "./main" ]
+CMD [ "./server" ]
