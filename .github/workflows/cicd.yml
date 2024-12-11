@@ -1,0 +1,31 @@
+name: Deploy Todo Go API
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+      - name: Create .env file
+        run: echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+      - name: Login to docker hub
+        run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build docker image
+        run: docker build -t peaceon/todo-api .
+      - name: Push image to docker hub
+        run: docker push peaceon/todo-api:latest
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - name: Pull docker image
+        run: docker pull peaceon/todo-api:latest
+      - name: Delete old container
+        run: docker rm -f go-app-container
+      - name: Run docker container
+        run: docker run -d -p 4000:4000 --name go-api-container peaceon/todo-api
