@@ -38,11 +38,21 @@ func Close() {
 
 func CreateTodosTable() error {
 	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lists (
+			list_id SERIAL PRIMARY KEY,
+			name TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		
 		CREATE TABLE IF NOT EXISTS todos (
-			id SERIAL PRIMARY KEY,
+			todo_id SERIAL PRIMARY KEY,
+			list_id INT REFERENCES lists(list_id) ON DELETE CASCADE,
 			title TEXT NOT NULL,
 			body TEXT,
-			done BOOLEAN DEFAULT false
+			done BOOLEAN DEFAULT false,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	return err

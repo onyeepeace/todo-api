@@ -22,12 +22,12 @@ func main() {
 
 	// Healthcheck endpoint
 	mux.HandleFunc("/healthcheck", handlers.HealthCheckHandler)
-
-	// Route for /api/todos
-	mux.HandleFunc("/api/todos", handlers.TodosHandler)
-
-	// Route for /api/todos/{id}
-	mux.HandleFunc("/api/todos/", handlers.TodoByIDHandler)
+	
+	mux.HandleFunc("/api/lists", handlers.ListsHandler)
+	mux.HandleFunc("/api/lists/", handlers.ListByIDHandler)
+	
+	mux.HandleFunc("/api/lists/{list_id}/todos", handlers.TodosHandler)
+	mux.HandleFunc("/api/lists/{list_id}/todos/", handlers.TodoByIDHandler)
 
 	// Start server with CORS middleware
 	log.Fatal(http.ListenAndServe(":4000", handlers.CorsMiddleware(mux)))
