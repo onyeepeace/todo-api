@@ -24,6 +24,8 @@ func ListsHandler(w http.ResponseWriter, r *http.Request) {
 
 func ListByIDHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodGet:
+		getListByIdHandler(w, r)
 	case http.MethodPut:
 		editListHandler(w, r)
 	case http.MethodDelete:
@@ -58,6 +60,31 @@ func getListsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(lists)
+}
+
+func getListByIdHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	list_id, err := parseIDFromListPath(r.URL.Path)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	query := `SELECT list_id, name, created_at, updated_at FROM lists WHERE list_id = $1`
+	row := db.QueryRow(query, list_id)
+
+	var list models.List
+	if err := row.Scan(&list.ListID, &list.Name, &list.CreatedAt, &list.UpdatedAt); err != nil {
+		http.Error(w, "List not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(list)
 }
 
 func createListHandler(w http.ResponseWriter, r *http.Request) {
