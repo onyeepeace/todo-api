@@ -14,7 +14,7 @@ var db *sql.DB
 func ConnectToDB() {
 	envErr := godotenv.Load()
 	if envErr != nil {
-		log.Fatalf("Error loading .env file: %v", envErr)
+		log.Println("Warning: .env file not found.")
 	}
 
 	connStr := os.Getenv("DATABASE_URL")
