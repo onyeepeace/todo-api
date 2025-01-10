@@ -6,6 +6,7 @@ import (
 
 	"github.com/onyeepeace/todo-api/internal/db"
 	"github.com/onyeepeace/todo-api/internal/handlers"
+	"github.com/onyeepeace/todo-api/internal/middleware"
 )
 
 func main() {
@@ -14,7 +15,7 @@ func main() {
 	defer db.Close()
 
 	// Create the todos table if it doesn't exist
-	if err := db.CreateTodosTable(); err != nil {
+	if err := db.CreateTables(); err != nil {
 		log.Fatalf("Failed to create table: %v", err)
 	}
 
@@ -22,13 +23,30 @@ func main() {
 
 	// Healthcheck endpoint
 	mux.HandleFunc("/healthcheck", handlers.HealthCheckHandler)
-	
-	mux.HandleFunc("/api/lists", handlers.ListsHandler)
-	mux.HandleFunc("/api/lists/", handlers.ListByIDHandler)
-	
-	mux.HandleFunc("/api/lists/{list_id}/todos", handlers.TodosHandler)
-	mux.HandleFunc("/api/lists/{list_id}/todos/", handlers.TodoByIDHandler)
+
+	// OAuth2 endpoints
+	mux.HandleFunc("/api/auth/login", handlers.LoginHandler)
+	mux.HandleFunc("/api/auth/callback", handlers.CallbackHandler)
+	mux.HandleFunc("/api/auth/logout", handlers.LogoutHandler)
+
+	// Protected routes
+	protectedMux := http.NewServeMux()
+
+	// Lists endpoints
+	protectedMux.HandleFunc("/api/lists", handlers.ListsHandler)
+	protectedMux.HandleFunc("/api/lists/", handlers.ListByIDHandler)
+	protectedMux.HandleFunc("/api/lists/share", handlers.ShareListHandler)
+
+	// Todos endpoints
+	protectedMux.HandleFunc("/api/lists/{list_id}/todos", handlers.TodosHandler)
+	protectedMux.HandleFunc("/api/lists/{list_id}/todos/", handlers.TodoByIDHandler)
+
+	// Wrap protectedMux with JWT validation middleware
+	protectedHandler := middleware.ValidateJWT(protectedMux.ServeHTTP)
+
+	// Mount protectedMux under /api
+	mux.Handle("/api/", protectedHandler)
 
 	// Start server with CORS middleware
-	log.Fatal(http.ListenAndServe(":4000", handlers.CorsMiddleware(mux)))
+	log.Fatal(http.ListenAndServe(":4000", middleware.CorsMiddleware(mux)))
 }

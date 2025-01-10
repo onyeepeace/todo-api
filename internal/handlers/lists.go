@@ -179,3 +179,32 @@ func parseIDFromListPath(path string) (int, error) {
 	}
 	return list_id, nil
 }
+
+func ShareListHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	listID, err := parseIDFromListPath(r.URL.Path)
+	if err != nil {
+		http.Error(w, "Invalid list ID", http.StatusBadRequest)
+		return
+	}
+
+	var shareRequest struct {
+		UserID int `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&shareRequest); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec("INSERT INTO shared_lists (list_id, user_id) VALUES ($1, $2)", listID, shareRequest.UserID)
+	if err != nil {
+		http.Error(w, "Failed to share list", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
