@@ -4,49 +4,67 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 	"github.com/onyeepeace/todo-api/internal/db"
 	"github.com/onyeepeace/todo-api/internal/handlers"
 	"github.com/onyeepeace/todo-api/internal/middleware"
 )
 
 func main() {
-	// Connect to the database
 	db.ConnectToDB()
 	defer db.Close()
 
-	// Create the todos table if it doesn't exist
 	if err := db.CreateTables(); err != nil {
 		log.Fatalf("Failed to create table: %v", err)
 	}
 
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
-	// Healthcheck endpoint
-	mux.HandleFunc("/healthcheck", handlers.HealthCheckHandler)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
 
-	// OAuth2 endpoints
-	mux.HandleFunc("/api/auth/login", handlers.LoginHandler)
-	mux.HandleFunc("/api/auth/callback", handlers.CallbackHandler)
-	mux.HandleFunc("/api/auth/logout", handlers.LogoutHandler)
+	r.Get("/healthcheck", handlers.HealthCheckHandler)
 
-	// Protected routes
-	protectedMux := http.NewServeMux()
+	r.Route("/api/auth", func(r chi.Router) {
+		r.Get("/login", handlers.LoginHandler)
+		r.Get("/callback", handlers.CallbackHandler)
+		r.Get("/logout", handlers.LogoutHandler)
+	})
 
-	// Lists endpoints
-	protectedMux.HandleFunc("/api/lists", handlers.ListsHandler)
-	protectedMux.HandleFunc("/api/lists/", handlers.ListByIDHandler)
-	protectedMux.HandleFunc("/api/lists/share", handlers.ShareListHandler)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.ValidateJWT)
 
-	// Todos endpoints
-	protectedMux.HandleFunc("/api/lists/{list_id}/todos", handlers.TodosHandler)
-	protectedMux.HandleFunc("/api/lists/{list_id}/todos/", handlers.TodoByIDHandler)
+		r.Route("/api/items", func(r chi.Router) {
+			r.Get("/", handlers.GetItemsHandler)
+			r.Post("/", handlers.CreateItemHandler)
+			r.Get("/{item_id}", handlers.GetItemByIDHandler)
+			r.Put("/{item_id}", handlers.EditItemHandler)
+			r.Delete("/{item_id}", handlers.DeleteItemHandler)
+			r.Route("/{item_id}/todos", func(r chi.Router) {
+				r.Get("/", handlers.GetTodosHandler)
+				r.Post("/", handlers.CreateTodoHandler)
+				r.Get("/{todo_id}", handlers.GetTodoByIDHandler)
+				r.Put("/{todo_id}", handlers.EditTodoHandler)
+				r.Patch("/{todo_id}/done", handlers.MarkTodoDoneHandler)
+				r.Delete("/{todo_id}", handlers.DeleteTodoHandler)
+			})
+			r.Route("/{item_id}/notes", func(r chi.Router) {
+				r.Get("/", handlers.GetNotesHandler)
+				r.Post("/", handlers.CreateNoteHandler)
+				r.Get("/{note_id}", handlers.GetNoteByIDHandler)
+				r.Put("/{note_id}", handlers.EditNoteHandler)
+				r.Delete("/{note_id}", handlers.DeleteNoteHandler)
+			})
+		})
 
-	// Wrap protectedMux with JWT validation middleware
-	protectedHandler := middleware.ValidateJWT(protectedMux.ServeHTTP)
+	})
 
-	// Mount protectedMux under /api
-	mux.Handle("/api/", protectedHandler)
-
-	// Start server with CORS middleware
-	log.Fatal(http.ListenAndServe(":4000", middleware.CorsMiddleware(mux)))
+	log.Fatal(http.ListenAndServe(":4000", r))
 }

@@ -48,6 +48,15 @@ func CreateTables() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
 
+		CREATE TABLE IF NOT EXISTS items (
+			item_id SERIAL PRIMARY KEY,
+			user_id INT REFERENCES users(user_id) ON DELETE CASCADE NOT NULL,
+			name TEXT NOT NULL,
+			content JSONB NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+		);
+
 		CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token_id SERIAL PRIMARY KEY,
 			user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
@@ -55,17 +64,17 @@ func CreateTables() error {
 			expires_at TIMESTAMP NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS lists (
-			list_id SERIAL PRIMARY KEY,
-			user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
-			name TEXT NOT NULL,
+		CREATE TABLE IF NOT EXISTS notes (
+			note_id SERIAL PRIMARY KEY REFERENCES items(item_id),
+			item_id INT REFERENCES items(item_id) ON DELETE CASCADE,
+			content JSONB NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
 
 		CREATE TABLE IF NOT EXISTS todos (
 			todo_id SERIAL PRIMARY KEY,
-			list_id INT REFERENCES lists(list_id) ON DELETE CASCADE,
+			item_id INT REFERENCES items(item_id) ON DELETE CASCADE,
 			title TEXT NOT NULL,
 			body TEXT,
 			done BOOLEAN DEFAULT false,
@@ -73,10 +82,11 @@ func CreateTables() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
 
-		CREATE TABLE IF NOT EXISTS shared_lists (
-			list_id INT REFERENCES lists(list_id) ON DELETE CASCADE,
+		CREATE TABLE IF NOT EXISTS shared_items (
+			item_id INT REFERENCES items(item_id) ON DELETE CASCADE,
 			user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
-			PRIMARY KEY (list_id, user_id)
+			role VARCHAR(50) NOT NULL,
+			PRIMARY KEY (item_id, user_id)
 		);
 	`)
 	return err

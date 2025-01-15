@@ -69,7 +69,6 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if user exists in the database
 	var user models.User
 	err = db.QueryRow("SELECT user_id, email FROM users WHERE provider_user_id = $1", userInfo.ProviderUserID).Scan(&user.UserID, &user.Email)
 	if err != nil {
@@ -80,14 +79,12 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate JWT token for the user
 	tokenString, err := middleware.GenerateJWT(user.UserID)
 	if err != nil {
 		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
-	// Return the token to the client
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
 }

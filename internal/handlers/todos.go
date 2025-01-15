@@ -2,58 +2,23 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/onyeepeace/todo-api/internal/db"
 	"github.com/onyeepeace/todo-api/internal/models"
 )
 
-func TodosHandler(w http.ResponseWriter, r *http.Request) {
-	listID, err := parseListIDFromPath(r.URL.Path)
+func GetTodosHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	itemID, err := strconv.Atoi(itemIDStr)
 	if err != nil {
-		http.Error(w, "Invalid list ID", http.StatusBadRequest)
+		http.Error(w, "Invalid item ID", http.StatusBadRequest)
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		getTodosHandler(w, r, listID)
-	case http.MethodPost:
-		createTodoHandler(w, r, listID)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func TodoByIDHandler(w http.ResponseWriter, r *http.Request) {
-	listID, todoID, err := parseListAndTodoIDFromPath(r.URL.Path)
-	if err != nil {
-		http.Error(w, "Invalid list or todo ID", http.StatusBadRequest)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPatch:
-		markTodoDoneHandler(w, r, listID, todoID)
-	case http.MethodPut:
-		editTodoHandler(w, r, listID, todoID)
-	case http.MethodDelete:
-		deleteTodoHandler(w, r, listID, todoID)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func getTodosHandler(w http.ResponseWriter, r *http.Request, listID int) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	rows, err := db.Query("SELECT todo_id, title, body, done FROM todos WHERE list_id = $1", listID)
+	rows, err := db.Query("SELECT todo_id, title, body, done FROM todos WHERE item_id = $1", itemID)
 	if err != nil {
 		http.Error(w, "Failed to retrieve todos", http.StatusInternalServerError)
 		return
@@ -74,9 +39,11 @@ func getTodosHandler(w http.ResponseWriter, r *http.Request, listID int) {
 	json.NewEncoder(w).Encode(todos)
 }
 
-func createTodoHandler(w http.ResponseWriter, r *http.Request, listID int) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func CreateTodoHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	itemID, err := strconv.Atoi(itemIDStr)
+	if err != nil {
+		http.Error(w, "Invalid item ID", http.StatusBadRequest)
 		return
 	}
 
@@ -86,9 +53,9 @@ func createTodoHandler(w http.ResponseWriter, r *http.Request, listID int) {
 		return
 	}
 
-	err := db.QueryRow(
-		"INSERT INTO todos (list_id, title, body, done) VALUES ($1, $2, $3, $4) RETURNING todo_id",
-		listID, todo.Title, todo.Body, todo.Done,
+	err = db.QueryRow(
+		"INSERT INTO todos (item_id, title, body, done) VALUES ($1, $2, $3, $4) RETURNING todo_id",
+		itemID, todo.Title, todo.Body, todo.Done,
 	).Scan(&todo.TodoID)
 	if err != nil {
 		http.Error(w, "Failed to insert todo", http.StatusInternalServerError)
@@ -99,26 +66,37 @@ func createTodoHandler(w http.ResponseWriter, r *http.Request, listID int) {
 	json.NewEncoder(w).Encode(todo)
 }
 
-func markTodoDoneHandler(w http.ResponseWriter, r *http.Request, listID, todoID int) {
-	if r.Method != http.MethodPatch {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func GetTodoByIDHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	todoIDStr := chi.URLParam(r, "todo_id")
+	itemID, err1 := strconv.Atoi(itemIDStr)
+	todoID, err2 := strconv.Atoi(todoIDStr)
+	if err1 != nil || err2 != nil {
+		http.Error(w, "Invalid item or todo ID", http.StatusBadRequest)
 		return
 	}
 
-	_, err := db.Exec("UPDATE todos SET done = true WHERE list_id = $1 AND todo_id = $2", listID, todoID)
-	if err != nil {
-		http.Error(w, "Failed to mark todo as done", http.StatusInternalServerError)
+	row := db.QueryRow("SELECT todo_id, title, body, done FROM todos WHERE item_id = $1 AND todo_id = $2", itemID, todoID)
+
+	var todo models.Todo
+	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Body, &todo.Done); err != nil {
+		http.Error(w, "Todo not found", http.StatusNotFound)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(todo)
 }
 
-func editTodoHandler(w http.ResponseWriter, r *http.Request, listID, todoID int) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func EditTodoHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	todoIDStr := chi.URLParam(r, "todo_id")
+	itemID, err1 := strconv.Atoi(itemIDStr)
+	todoID, err2 := strconv.Atoi(todoIDStr)
+	if err1 != nil || err2 != nil {
+		http.Error(w, "Invalid item or todo ID", http.StatusBadRequest)
 		return
 	}
-
 
 	var updatedTodo models.Todo
 	if err := json.NewDecoder(r.Body).Decode(&updatedTodo); err != nil {
@@ -127,9 +105,9 @@ func editTodoHandler(w http.ResponseWriter, r *http.Request, listID, todoID int)
 	}
 
 	query := `UPDATE todos SET title = $1, body = $2, done = $3 
-              WHERE list_id = $4 AND todo_id = $5 
+              WHERE item_id = $4 AND todo_id = $5 
               RETURNING todo_id, title, body, done`
-	row := db.QueryRow(query, updatedTodo.Title, updatedTodo.Body, updatedTodo.Done, listID, todoID)
+	row := db.QueryRow(query, updatedTodo.Title, updatedTodo.Body, updatedTodo.Done, itemID, todoID)
 
 	var todo models.Todo
 	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Body, &todo.Done); err != nil {
@@ -141,14 +119,18 @@ func editTodoHandler(w http.ResponseWriter, r *http.Request, listID, todoID int)
 	json.NewEncoder(w).Encode(todo)
 }
 
-func deleteTodoHandler(w http.ResponseWriter, r *http.Request, listID, todoID int) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func DeleteTodoHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	todoIDStr := chi.URLParam(r, "todo_id")
+	itemID, err1 := strconv.Atoi(itemIDStr)
+	todoID, err2 := strconv.Atoi(todoIDStr)
+	if err1 != nil || err2 != nil {
+		http.Error(w, "Invalid item or todo ID", http.StatusBadRequest)
 		return
 	}
 
-	query := `DELETE FROM todos WHERE list_id = $1 AND todo_id = $2`
-	result, err := db.Exec(query, listID, todoID)
+	query := `DELETE FROM todos WHERE item_id = $1 AND todo_id = $2`
+	result, err := db.Exec(query, itemID, todoID)
 	if err != nil {
 		http.Error(w, "Failed to delete todo", http.StatusInternalServerError)
 		return
@@ -163,24 +145,21 @@ func deleteTodoHandler(w http.ResponseWriter, r *http.Request, listID, todoID in
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Parsing helpers
-func parseListIDFromPath(path string) (int, error) {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "api" || parts[1] != "lists" {
-		return 0, errors.New("invalid path format")
-	}
-	return strconv.Atoi(parts[2])
-}
-
-func parseListAndTodoIDFromPath(path string) (int, int, error) {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 || parts[0] != "api" || parts[1] != "lists" || parts[3] != "todos" {
-		return 0, 0, errors.New("invalid path format")
-	}
-	listID, err1 := strconv.Atoi(parts[2])
-	todoID, err2 := strconv.Atoi(parts[4])
+func MarkTodoDoneHandler(w http.ResponseWriter, r *http.Request) {
+	itemIDStr := chi.URLParam(r, "item_id")
+	todoIDStr := chi.URLParam(r, "todo_id")
+	itemID, err1 := strconv.Atoi(itemIDStr)
+	todoID, err2 := strconv.Atoi(todoIDStr)
 	if err1 != nil || err2 != nil {
-		return 0, 0, errors.New("invalid list or todo ID")
+		http.Error(w, "Invalid item or todo ID", http.StatusBadRequest)
+		return
 	}
-	return listID, todoID, nil
+
+	_, err := db.Exec("UPDATE todos SET done = true WHERE item_id = $1 AND todo_id = $2", itemID, todoID)
+	if err != nil {
+		http.Error(w, "Failed to mark todo as done", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

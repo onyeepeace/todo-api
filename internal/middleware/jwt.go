@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -21,7 +22,6 @@ func init() {
 
 var jwtSecret = []byte(os.Getenv("JWT_SECRET"))
 
-// Generate JWT token for authentication
 func GenerateJWT(userID int) (string, error) {
 	claims := &models.JWTClaims{
 		UserID: userID,
@@ -34,16 +34,15 @@ func GenerateJWT(userID int) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
-// Middleware to validate JWT
-func ValidateJWT(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func ValidateJWT(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			http.Error(w, "Authorization header missing", http.StatusUnauthorized)
 			return
 		}
 
-		tokenStr := authHeader[len("Bearer "):]
+		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims := &models.JWTClaims{}
 
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
@@ -54,8 +53,7 @@ func ValidateJWT(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Add user ID to the request context for downstream handlers
-		r = r.WithContext(context.WithValue(r.Context(), "user_id", claims.UserID))
-		next(w, r)
-	}
+		r = r.WithContext(context.WithValue(r.Context(), models.UserIDKey, claims.UserID))
+		next.ServeHTTP(w, r)
+	})
 }
