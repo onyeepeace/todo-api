@@ -3,21 +3,36 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/joho/godotenv"
 	"github.com/onyeepeace/todo-api/internal/db"
 	"github.com/onyeepeace/todo-api/internal/handlers"
 	"github.com/onyeepeace/todo-api/internal/middleware"
 )
 
 func main() {
-	db.ConnectToDB()
-	defer db.Close()
-
-	if err := db.CreateTables(); err != nil {
-		log.Fatalf("Failed to create table: %v", err)
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: .env file not found")
 	}
+
+	// Initialize database
+	config := db.Config{
+		Host:     os.Getenv("DB_HOST"),
+		Port:     5432,
+		User:     os.Getenv("DB_USER"),
+		Password: os.Getenv("DB_PASSWORD"),
+		DBName:   os.Getenv("DB_NAME"),
+		SSLMode:  "disable",
+	}
+
+	if _, err := db.Initialize(config); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer db.Close()
 
 	r := chi.NewRouter()
 
@@ -47,6 +62,7 @@ func main() {
 			r.Get("/{item_id}", handlers.GetItemByIDHandler)
 			r.Put("/{item_id}", handlers.EditItemHandler)
 			r.Delete("/{item_id}", handlers.DeleteItemHandler)
+			r.Post("/{item_id}/share", handlers.ShareItemHandler)
 			r.Route("/{item_id}/todos", func(r chi.Router) {
 				r.Get("/", handlers.GetTodosHandler)
 				r.Post("/", handlers.CreateTodoHandler)
@@ -55,15 +71,12 @@ func main() {
 				r.Patch("/{todo_id}/done", handlers.MarkTodoDoneHandler)
 				r.Delete("/{todo_id}", handlers.DeleteTodoHandler)
 			})
-			r.Route("/{item_id}/notes", func(r chi.Router) {
-				r.Get("/", handlers.GetNotesHandler)
-				r.Post("/", handlers.CreateNoteHandler)
-				r.Get("/{note_id}", handlers.GetNoteByIDHandler)
-				r.Put("/{note_id}", handlers.EditNoteHandler)
-				r.Delete("/{note_id}", handlers.DeleteNoteHandler)
-			})
 		})
 
+		// Add users endpoints
+		r.Route("/api/users", func(r chi.Router) {
+			r.Get("/lookup", handlers.LookupUserHandler)
+		})
 	})
 
 	log.Fatal(http.ListenAndServe(":4000", r))

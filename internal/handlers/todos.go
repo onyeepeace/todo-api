@@ -18,7 +18,7 @@ func GetTodosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.Query("SELECT todo_id, title, body, done FROM todos WHERE item_id = $1", itemID)
+	rows, err := db.Query("SELECT todo_id, title, done FROM todos WHERE item_id = $1", itemID)
 	if err != nil {
 		http.Error(w, "Failed to retrieve todos", http.StatusInternalServerError)
 		return
@@ -28,7 +28,7 @@ func GetTodosHandler(w http.ResponseWriter, r *http.Request) {
 	var todos []models.Todo
 	for rows.Next() {
 		var todo models.Todo
-		if err := rows.Scan(&todo.TodoID, &todo.Title, &todo.Body, &todo.Done); err != nil {
+		if err := rows.Scan(&todo.TodoID, &todo.Title, &todo.Done); err != nil {
 			http.Error(w, "Failed to scan todo", http.StatusInternalServerError)
 			return
 		}
@@ -54,8 +54,8 @@ func CreateTodoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = db.QueryRow(
-		"INSERT INTO todos (item_id, title, body, done) VALUES ($1, $2, $3, $4) RETURNING todo_id",
-		itemID, todo.Title, todo.Body, todo.Done,
+		"INSERT INTO todos (item_id, title, done) VALUES ($1, $2, $3) RETURNING todo_id",
+		itemID, todo.Title, todo.Done,
 	).Scan(&todo.TodoID)
 	if err != nil {
 		http.Error(w, "Failed to insert todo", http.StatusInternalServerError)
@@ -76,10 +76,10 @@ func GetTodoByIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row := db.QueryRow("SELECT todo_id, title, body, done FROM todos WHERE item_id = $1 AND todo_id = $2", itemID, todoID)
+	row := db.QueryRow("SELECT todo_id, title, done FROM todos WHERE item_id = $1 AND todo_id = $2", itemID, todoID)
 
 	var todo models.Todo
-	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Body, &todo.Done); err != nil {
+	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Done); err != nil {
 		http.Error(w, "Todo not found", http.StatusNotFound)
 		return
 	}
@@ -104,13 +104,13 @@ func EditTodoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `UPDATE todos SET title = $1, body = $2, done = $3 
-              WHERE item_id = $4 AND todo_id = $5 
-              RETURNING todo_id, title, body, done`
-	row := db.QueryRow(query, updatedTodo.Title, updatedTodo.Body, updatedTodo.Done, itemID, todoID)
+	query := `UPDATE todos SET title = $1, done = $2 
+              WHERE item_id = $3 AND todo_id = $4 
+              RETURNING todo_id, title, done`
+	row := db.QueryRow(query, updatedTodo.Title, updatedTodo.Done, itemID, todoID)
 
 	var todo models.Todo
-	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Body, &todo.Done); err != nil {
+	if err := row.Scan(&todo.TodoID, &todo.Title, &todo.Done); err != nil {
 		http.Error(w, "Todo not found or update failed", http.StatusNotFound)
 		return
 	}
