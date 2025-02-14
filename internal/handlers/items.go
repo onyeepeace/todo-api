@@ -25,7 +25,6 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			i.item_id,
 			i.name,
 			i.content,
-			i.version,
 			i.created_at,
 			i.updated_at,
 			r.name as role_name,
@@ -60,7 +59,6 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 			&item.ItemID,
 			&item.Name,
 			&item.Content,
-			&item.Version,
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.Role,
@@ -114,9 +112,9 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create item
 	err = tx.QueryRow(
-		"INSERT INTO items (name, content) VALUES ($1, $2::jsonb) RETURNING item_id, name, content, version, created_at, updated_at",
+		"INSERT INTO items (name, content) VALUES ($1, $2::jsonb) RETURNING item_id, name, content, created_at, updated_at",
 		item.Name, item.Content,
-	).Scan(&item.ItemID, &item.Name, &item.Content, &item.Version, &item.CreatedAt, &item.UpdatedAt)
+	).Scan(&item.ItemID, &item.Name, &item.Content, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		log.Printf("Error creating item: %v", err)
 		http.Error(w, "Failed to create item", http.StatusInternalServerError)
@@ -173,7 +171,6 @@ func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
 			i.item_id,
 			i.name,
 			i.content,
-			i.version,
 			i.created_at,
 			i.updated_at,
 			r.name as role_name,
@@ -199,7 +196,6 @@ func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
 		&item.ItemID,
 		&item.Name,
 		&item.Content,
-		&item.Version,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 		&item.Role,
@@ -220,6 +216,18 @@ func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
 		item.SharedBy = sharedByEmail.String
 	}
 
+	// Generate ETag
+	etag := item.Item.GenerateETag()
+	w.Header().Set("ETag", etag)
+
+	// Check If-None-Match header for cache validation
+	if match := r.Header.Get("If-None-Match"); match != "" {
+		if match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(item)
 }
@@ -227,7 +235,6 @@ func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
 type UpdateItemRequest struct {
 	Name    string          `json:"name"`
 	Content json.RawMessage `json:"content"`
-	Version int            `json:"version"` // Client must send current version
 }
 
 func EditItemHandler(w http.ResponseWriter, r *http.Request) {
@@ -253,33 +260,43 @@ func EditItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Get current version
-	var currentVersion int
-	err = tx.QueryRow("SELECT version FROM items WHERE item_id = $1", itemID).Scan(&currentVersion)
+	// Get current item state
+	var currentItem models.Item
+	err = tx.QueryRow(`
+		SELECT item_id, name, content, created_at, updated_at
+		FROM items WHERE item_id = $1
+	`, itemID).Scan(
+		&currentItem.ItemID,
+		&currentItem.Name,
+		&currentItem.Content,
+		&currentItem.CreatedAt,
+		&currentItem.UpdatedAt,
+	)
 	if err != nil {
-		log.Printf("Error getting current version: %v", err)
-		http.Error(w, "Failed to get current version", http.StatusInternalServerError)
+		log.Printf("Error getting current item state: %v", err)
+		http.Error(w, "Failed to get current item state", http.StatusInternalServerError)
 		return
 	}
 
-	// Optimistic concurrency check
-	if updateReq.Version != currentVersion {
-		http.Error(w, "Version mismatch - item has been modified", http.StatusConflict)
-		return
+	// Check If-Match header
+	if match := r.Header.Get("If-Match"); match != "" {
+		if !currentItem.ValidateETag(match) {
+			http.Error(w, "Precondition Failed - Item has been modified", http.StatusPreconditionFailed)
+			return
+		}
 	}
 
 	// Update the item
 	var updatedItem models.Item
 	err = tx.QueryRow(`
 		UPDATE items 
-		SET name = $1, content = $2::jsonb, version = version + 1 
+		SET name = $1, content = $2::jsonb, updated_at = NOW()
 		WHERE item_id = $3 
-		RETURNING item_id, name, content, version, created_at, updated_at
+		RETURNING item_id, name, content, created_at, updated_at
 	`, updateReq.Name, updateReq.Content, itemID).Scan(
 		&updatedItem.ItemID,
 		&updatedItem.Name,
 		&updatedItem.Content,
-		&updatedItem.Version,
 		&updatedItem.CreatedAt,
 		&updatedItem.UpdatedAt,
 	)
@@ -295,6 +312,9 @@ func EditItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate new ETag
+	etag := updatedItem.GenerateETag()
+	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updatedItem)
 }
