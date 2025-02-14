@@ -4,6 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/onyeepeace/todo-api/internal/models"
 )
 
 var (
@@ -11,16 +15,34 @@ var (
 	ErrForbidden    = errors.New("forbidden")
 )
 
-// CheckUserPermission middleware checks if the user has the required permission for an item
-func CheckUserPermission(db *sql.DB, requiredPermission string) func(next http.HandlerFunc) http.HandlerFunc {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			userID := r.Context().Value("user_id").(int) // Set by auth middleware
-			itemID := r.Context().Value("item_id").(int) // Set by previous middleware
+// Authorize middleware checks if the user has the required permission
+func Authorize(db *sql.DB, requiredPermission string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID, ok := r.Context().Value(models.UserIDKey).(int)
+			if !ok {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract item_id from URL parameters
+			itemIDStr := chi.URLParam(r, "item_id")
+			if itemIDStr == "" {
+				// If no item_id in URL, this might be a list endpoint or creation endpoint
+				// Let it pass through as the handler will handle appropriate checks
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			itemID, err := strconv.Atoi(itemIDStr)
+			if err != nil {
+				http.Error(w, "Invalid item ID", http.StatusBadRequest)
+				return
+			}
 
 			// Check if user has the required permission
 			var exists bool
-			err := db.QueryRow(`
+			err = db.QueryRow(`
 				SELECT EXISTS (
 					SELECT 1 FROM user_roles ur
 					JOIN roles r ON ur.role_id = r.role_id
@@ -43,7 +65,7 @@ func CheckUserPermission(db *sql.DB, requiredPermission string) func(next http.H
 			}
 
 			next.ServeHTTP(w, r)
-		}
+		})
 	}
 }
 
@@ -90,27 +112,4 @@ func CheckPermission(db *sql.DB, userID, itemID int, permission string) (bool, e
 	`, userID, itemID, permission).Scan(&exists)
 
 	return exists, err
-}
-
-// Authorize middleware checks if the user has the required permission
-func Authorize(db *sql.DB, action string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID := r.Context().Value("user_id").(int)
-			itemID := r.Context().Value("item_id").(int)
-
-			hasPermission, err := CheckPermission(db, userID, itemID, action)
-			if err != nil {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			if !hasPermission {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }

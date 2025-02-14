@@ -55,7 +55,7 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item ItemWithAccess
 		var sharedByEmail sql.NullString // Use sql.NullString for potentially null shared_by_email
-		
+
 		if err := rows.Scan(
 			&item.ItemID,
 			&item.Name,
@@ -84,7 +84,6 @@ func GetItemsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
-	// Get user ID from context
 	userID, ok := r.Context().Value(models.UserIDKey).(int)
 	if !ok {
 		log.Printf("Error: User ID not found in context")
@@ -92,7 +91,6 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decode request body
 	var item models.Item
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 		log.Printf("Error decoding request body: %v", err)
@@ -104,8 +102,6 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
 	if item.Content == nil {
 		item.Content = json.RawMessage("[]")
 	}
-
-	log.Printf("Creating item with name: %s and content: %s", item.Name, string(item.Content))
 
 	// Start transaction
 	tx, err := db.DB().Begin()
@@ -136,8 +132,6 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Found owner role ID: %d", ownerRoleID)
-
 	// Assign owner role to creator
 	_, err = tx.Exec(
 		"INSERT INTO user_roles (item_id, user_id, role_id, created_by) VALUES ($1, $2, $3, $2)",
@@ -149,20 +143,23 @@ func CreateItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		log.Printf("Error committing transaction: %v", err)
 		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully created item with ID: %d", item.ItemID)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(item)
 }
 
 func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(models.UserIDKey).(int)
+	if !ok {
+		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
+		return
+	}
+
 	itemIDStr := chi.URLParam(r, "item_id")
 	itemID, err := strconv.Atoi(itemIDStr)
 	if err != nil {
@@ -170,13 +167,57 @@ func GetItemByIDHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT item_id, name, content, version, created_at, updated_at FROM items WHERE item_id = $1`
-	row := db.QueryRow(query, itemID)
+	// Query item with user's role and who shared it
+	query := `
+		SELECT 
+			i.item_id,
+			i.name,
+			i.content,
+			i.version,
+			i.created_at,
+			i.updated_at,
+			r.name as role_name,
+			u.email as shared_by_email
+		FROM items i
+		JOIN user_roles ur ON i.item_id = ur.item_id
+		JOIN roles r ON ur.role_id = r.role_id
+		LEFT JOIN users u ON ur.created_by = u.user_id
+		WHERE i.item_id = $1 AND ur.user_id = $2
+	`
+	row := db.QueryRow(query, itemID, userID)
 
-	var item models.Item
-	if err := row.Scan(&item.ItemID, &item.Name, &item.Content, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
-		http.Error(w, "Item not found", http.StatusNotFound)
+	type ItemWithAccess struct {
+		models.Item
+		Role     string `json:"role"`      // owner, editor, or viewer
+		SharedBy string `json:"shared_by"` // email of user who shared it (null if owner)
+	}
+
+	var item ItemWithAccess
+	var sharedByEmail sql.NullString
+
+	err = row.Scan(
+		&item.ItemID,
+		&item.Name,
+		&item.Content,
+		&item.Version,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.Role,
+		&sharedByEmail,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Item not found", http.StatusNotFound)
+		} else {
+			log.Printf("Error scanning item: %v", err)
+			http.Error(w, "Failed to get item", http.StatusInternalServerError)
+		}
 		return
+	}
+
+	// Only set SharedBy if the item was shared (role is not owner)
+	if item.Role != "owner" && sharedByEmail.Valid {
+		item.SharedBy = sharedByEmail.String
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -190,14 +231,6 @@ type UpdateItemRequest struct {
 }
 
 func EditItemHandler(w http.ResponseWriter, r *http.Request) {
-	// Get user ID from context
-	userID, ok := r.Context().Value(models.UserIDKey).(int)
-	if !ok {
-		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
-		return
-	}
-
-	// Get item ID from URL
 	itemIDStr := chi.URLParam(r, "item_id")
 	itemID, err := strconv.Atoi(itemIDStr)
 	if err != nil {
@@ -205,14 +238,11 @@ func EditItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse request body
 	var updateReq UpdateItemRequest
 	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("Attempting to update item %d with version %d", itemID, updateReq.Version)
 
 	// Start transaction
 	tx, err := db.DB().Begin()
@@ -232,86 +262,41 @@ func EditItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Current version in DB: %d, Client version: %d", currentVersion, updateReq.Version)
-
-	// Check if user has edit permission
-	var canEdit bool
-	err = tx.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM user_roles ur
-			JOIN roles r ON ur.role_id = r.role_id
-			JOIN role_permissions rp ON r.role_id = rp.role_id
-			JOIN permissions p ON rp.permission_id = p.permission_id
-			WHERE ur.user_id = $1
-			AND ur.item_id = $2
-			AND p.name = 'can_edit'
-		)
-	`, userID, itemID).Scan(&canEdit)
-
-	if err != nil {
-		log.Printf("Error checking edit permission: %v", err)
-		http.Error(w, "Failed to verify permissions", http.StatusInternalServerError)
+	// Optimistic concurrency check
+	if updateReq.Version != currentVersion {
+		http.Error(w, "Version mismatch - item has been modified", http.StatusConflict)
 		return
 	}
 
-	if !canEdit {
-		http.Error(w, "You don't have permission to edit this item", http.StatusForbidden)
-		return
-	}
-
-	// Update the item with version check
-	var item models.Item
+	// Update the item
+	var updatedItem models.Item
 	err = tx.QueryRow(`
 		UPDATE items 
-		SET name = $1, 
-			content = $2, 
-			version = version + 1,
-			updated_at = NOW() 
+		SET name = $1, content = $2::jsonb, version = version + 1 
 		WHERE item_id = $3 
-		AND version = $4
 		RETURNING item_id, name, content, version, created_at, updated_at
-	`, updateReq.Name, updateReq.Content, itemID, updateReq.Version).Scan(
-		&item.ItemID,
-		&item.Name,
-		&item.Content,
-		&item.Version,
-		&item.CreatedAt,
-		&item.UpdatedAt,
+	`, updateReq.Name, updateReq.Content, itemID).Scan(
+		&updatedItem.ItemID,
+		&updatedItem.Name,
+		&updatedItem.Content,
+		&updatedItem.Version,
+		&updatedItem.CreatedAt,
+		&updatedItem.UpdatedAt,
 	)
-
 	if err != nil {
-		if err == sql.ErrNoRows {
-			// Check if item exists but version doesn't match
-			var exists bool
-			err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM items WHERE item_id = $1)", itemID).Scan(&exists)
-			if err != nil {
-				log.Printf("Error checking item existence: %v", err)
-				http.Error(w, "Failed to verify item existence", http.StatusInternalServerError)
-				return
-			}
-			if exists {
-				log.Printf("Version mismatch detected. Update failed.")
-				http.Error(w, "Item was modified by another user. Please refresh and try again.", http.StatusConflict)
-			} else {
-				http.Error(w, "Item not found", http.StatusNotFound)
-			}
-		} else {
-			log.Printf("Error updating item: %v", err)
-			http.Error(w, "Failed to update item", http.StatusInternalServerError)
-		}
-		return
-	}
-
-	log.Printf("Successfully updated item %d to version %d", itemID, item.Version)
-
-	if err := tx.Commit(); err != nil {
-		log.Printf("Error committing transaction: %v", err)
+		log.Printf("Error updating item: %v", err)
 		http.Error(w, "Failed to update item", http.StatusInternalServerError)
 		return
 	}
 
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(item)
+	json.NewEncoder(w).Encode(updatedItem)
 }
 
 func DeleteItemHandler(w http.ResponseWriter, r *http.Request) {
@@ -322,9 +307,35 @@ func DeleteItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `DELETE FROM items WHERE item_id = $1`
-	result, err := db.Exec(query, itemID)
+	// Start transaction
+	tx, err := db.DB().Begin()
 	if err != nil {
+		log.Printf("Error starting transaction: %v", err)
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// Delete associated todos first
+	_, err = tx.Exec("DELETE FROM todos WHERE item_id = $1", itemID)
+	if err != nil {
+		log.Printf("Error deleting todos: %v", err)
+		http.Error(w, "Failed to delete todos", http.StatusInternalServerError)
+		return
+	}
+
+	// Delete user roles
+	_, err = tx.Exec("DELETE FROM user_roles WHERE item_id = $1", itemID)
+	if err != nil {
+		log.Printf("Error deleting user roles: %v", err)
+		http.Error(w, "Failed to delete user roles", http.StatusInternalServerError)
+		return
+	}
+
+	// Delete the item
+	result, err := tx.Exec("DELETE FROM items WHERE item_id = $1", itemID)
+	if err != nil {
+		log.Printf("Error deleting item: %v", err)
 		http.Error(w, "Failed to delete item", http.StatusInternalServerError)
 		return
 	}
@@ -335,18 +346,22 @@ func DeleteItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func ShareItemHandler(w http.ResponseWriter, r *http.Request) {
-	// Get current user ID (the sharer)
-	currentUserID, ok := r.Context().Value(models.UserIDKey).(int)
+	userID, ok := r.Context().Value(models.UserIDKey).(int)
 	if !ok {
 		http.Error(w, "User ID not found in context", http.StatusInternalServerError)
 		return
 	}
 
-	// Get item ID from URL
 	itemIDStr := chi.URLParam(r, "item_id")
 	itemID, err := strconv.Atoi(itemIDStr)
 	if err != nil {
@@ -364,11 +379,23 @@ func ShareItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate required fields
+	if shareRequest.UserID == 0 {
+		http.Error(w, "user_id is required", http.StatusBadRequest)
+		return
+	}
+	if shareRequest.Role == "" {
+		http.Error(w, "role is required", http.StatusBadRequest)
+		return
+	}
+
 	// Validate role
 	if shareRequest.Role != "editor" && shareRequest.Role != "viewer" {
 		http.Error(w, "Invalid role. Must be 'editor' or 'viewer'", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Attempting to share item %d with user ID: %d, role: %s", itemID, shareRequest.UserID, shareRequest.Role)
 
 	// Start transaction
 	tx, err := db.DB().Begin()
@@ -379,57 +406,58 @@ func ShareItemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Verify current user has permission to share
-	var canShare bool
-	err = tx.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM user_roles ur
-			JOIN roles r ON ur.role_id = r.role_id
-			JOIN role_permissions rp ON r.role_id = rp.role_id
-			JOIN permissions p ON rp.permission_id = p.permission_id
-			WHERE ur.user_id = $1
-			AND ur.item_id = $2
-			AND p.name = 'can_share'
-		)
-	`, currentUserID, itemID).Scan(&canShare)
-
+	// Verify user exists
+	var exists bool
+	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE user_id = $1)", shareRequest.UserID).Scan(&exists)
 	if err != nil {
-		log.Printf("Error checking share permission: %v", err)
-		http.Error(w, "Failed to verify permissions", http.StatusInternalServerError)
+		log.Printf("Error verifying user existence: %v", err)
+		http.Error(w, "Failed to verify user", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
-	if !canShare {
-		http.Error(w, "You don't have permission to share this item", http.StatusForbidden)
-		return
-	}
-
-	// Get role ID for the requested role
+	// Get role ID
 	var roleID int
 	err = tx.QueryRow("SELECT role_id FROM roles WHERE name = $1", shareRequest.Role).Scan(&roleID)
 	if err != nil {
-		log.Printf("Error getting role ID: %v", err)
-		http.Error(w, "Invalid role", http.StatusInternalServerError)
+		log.Printf("Error getting role: %v", err)
+		http.Error(w, "Failed to get role", http.StatusInternalServerError)
 		return
 	}
 
-	// Share the item (upsert in case the user already has a role)
-	_, err = tx.Exec(`
-		INSERT INTO user_roles (item_id, user_id, role_id, created_by)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (item_id, user_id) 
-		DO UPDATE SET role_id = $3, created_by = $4
-	`, itemID, shareRequest.UserID, roleID, currentUserID)
+	log.Printf("Found role ID: %d for role: %s", roleID, shareRequest.Role)
+
+	// Check if user already has a role for this item
+	var existingRoleID int
+	err = tx.QueryRow("SELECT role_id FROM user_roles WHERE user_id = $1 AND item_id = $2", shareRequest.UserID, itemID).Scan(&existingRoleID)
+	if err == nil {
+		// Update existing role
+		_, err = tx.Exec(
+			"UPDATE user_roles SET role_id = $1, created_by = $2 WHERE user_id = $3 AND item_id = $4",
+			roleID, userID, shareRequest.UserID, itemID,
+		)
+		log.Printf("Updated existing role for user")
+	} else if err == sql.ErrNoRows {
+		// Insert new role
+		_, err = tx.Exec(
+			"INSERT INTO user_roles (item_id, user_id, role_id, created_by) VALUES ($1, $2, $3, $4)",
+			itemID, shareRequest.UserID, roleID, userID,
+		)
+		log.Printf("Inserted new role for user")
+	}
 
 	if err != nil {
-		log.Printf("Error sharing item: %v", err)
-		http.Error(w, "Failed to share item", http.StatusInternalServerError)
+		log.Printf("Error updating user role: %v", err)
+		http.Error(w, "Failed to update user role", http.StatusInternalServerError)
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
 		log.Printf("Error committing transaction: %v", err)
-		http.Error(w, "Failed to share item", http.StatusInternalServerError)
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 		return
 	}
 

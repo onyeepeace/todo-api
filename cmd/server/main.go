@@ -68,23 +68,30 @@ func main() {
 		r.Route("/api/items", func(r chi.Router) {
 			r.Get("/", handlers.GetItemsHandler)
 			r.Post("/", handlers.CreateItemHandler)
-			r.Get("/{item_id}", handlers.GetItemByIDHandler)
-			r.Put("/{item_id}", handlers.EditItemHandler)
-			r.Delete("/{item_id}", handlers.DeleteItemHandler)
-			r.Post("/{item_id}/share", handlers.ShareItemHandler)
-			r.Route("/{item_id}/todos", func(r chi.Router) {
-				r.Get("/", handlers.GetTodosHandler)
-				r.Post("/", handlers.CreateTodoHandler)
-				r.Get("/{todo_id}", handlers.GetTodoByIDHandler)
-				r.Put("/{todo_id}", handlers.EditTodoHandler)
-				r.Patch("/{todo_id}/done", handlers.MarkTodoDoneHandler)
-				r.Delete("/{todo_id}", handlers.DeleteTodoHandler)
+			
+			// Routes that need item_id
+			r.Group(func(r chi.Router) {
+				r.With(middleware.Authorize(db.DB(), "can_view")).Get("/{item_id}", handlers.GetItemByIDHandler)
+				r.With(middleware.Authorize(db.DB(), "can_edit")).Put("/{item_id}", handlers.EditItemHandler)
+				r.With(middleware.Authorize(db.DB(), "can_edit")).Delete("/{item_id}", handlers.DeleteItemHandler)
+				r.With(middleware.Authorize(db.DB(), "can_edit")).Post("/{item_id}/share", handlers.ShareItemHandler)
+
+				// Todos routes
+				r.Route("/{item_id}/todos", func(r chi.Router) {
+					r.With(middleware.Authorize(db.DB(), "can_view")).Get("/", handlers.GetTodosHandler)
+					r.With(middleware.Authorize(db.DB(), "can_edit")).Post("/", handlers.CreateTodoHandler)
+					r.With(middleware.Authorize(db.DB(), "can_view")).Get("/{todo_id}", handlers.GetTodoByIDHandler)
+					r.With(middleware.Authorize(db.DB(), "can_edit")).Put("/{todo_id}", handlers.EditTodoHandler)
+					r.With(middleware.Authorize(db.DB(), "can_edit")).Patch("/{todo_id}/done", handlers.MarkTodoDoneHandler)
+					r.With(middleware.Authorize(db.DB(), "can_edit")).Delete("/{todo_id}", handlers.DeleteTodoHandler)
+				})
 			})
 		})
 
 		// Add users endpoints
 		r.Route("/api/users", func(r chi.Router) {
 			r.Get("/lookup", handlers.LookupUserHandler)
+			r.Get("/me", handlers.GetCurrentUserHandler)
 		})
 	})
 
