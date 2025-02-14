@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
 
@@ -18,15 +17,15 @@ import (
 var googleOauthConfig = &oauth2.Config{}
 
 func init() {
-	envErr := godotenv.Load()
-	if envErr != nil {
-		log.Println("Warning: .env file not found.")
-	}
+	_ = godotenv.Load()
+
+	clientID := os.Getenv("GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
 
 	googleOauthConfig = &oauth2.Config{
-		RedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
-		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
-		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  "postmessage",
 		Scopes:       []string{"email", "profile"},
 		Endpoint:     google.Endpoint,
 	}

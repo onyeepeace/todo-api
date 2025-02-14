@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
@@ -35,20 +36,28 @@ func main() {
 	defer db.Close()
 
 	r := chi.NewRouter()
-
+	
+	allowedOrigins := strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",")
+	
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			allowedOriginsMap := make(map[string]bool)
+			for _, o := range allowedOrigins {
+				allowedOriginsMap[strings.TrimSpace(o)] = true
+			}
+			return allowedOriginsMap[origin]
+		},
 	}))
 
 	r.Get("/healthcheck", handlers.HealthCheckHandler)
 
 	r.Route("/api/auth", func(r chi.Router) {
-		r.Get("/login", handlers.LoginHandler)
 		r.Get("/callback", handlers.CallbackHandler)
 		r.Get("/logout", handlers.LogoutHandler)
 	})
